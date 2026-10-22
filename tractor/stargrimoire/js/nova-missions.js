@@ -1,0 +1,260 @@
+/* nova-missions.js -- missions, and the storylines they make, from the files.
+   =========================================================================
+
+   STORYLINES. No storyline has a name the player sees, but Ambrosia's
+   mission resources do: 578 of 1.1.1's 791 have a note after a semicolon
+   in their name ("Pick up Mu'Randa;Polaris1", "Take Polaris Home;Rebel
+   I22 LAST"), which the program cuts off before showing the name
+   (novaNameParts). The note is a storyline's name and the mission's step
+   in it, and sometimes more: LAST for its last mission, "Unregistered
+   cutoff" where the unregistered game stops, "link to Pirate storyline",
+   "(forced)". A storyline here is the missions whose notes share a name
+   before the step, in any case and spacing; the notes are read as written,
+   so "Rebel", "Rebel I" and "Rebel II" are three, as Ambrosia wrote them.
+   The evnova.miraheze.org wiki has the same steps ("Done Rebel I.022"),
+   and utilities/missions_check.mjs compares this reading with it.
+
+   PLACES. AvailStel, TravelStel, ReturnStel and ShipSyst are the Bible's
+   codes (its mïsn section): a stellar or system id, or a range that means
+   a kind of place, a government's by index (id - 128) past an offset. One
+   more is in the files: AvailStel 127, below every stellar id, on seven
+   "Silent Mission"s that others start with Sxxx and nothing offers.
+
+   LEADS TO. One mission leads to another when it starts it (S in a set
+   expression), or turns on a bit the other's AvailBits needs on (as the
+   game reads it), the bit that the fewest missions turn on: of the bits a
+   mission needs, the rarest marks the step it waits for, while a bit many
+   missions turn on (a storyline "in progress") only shows the storyline is
+   under way. Turning
+   on counts on accepting, on success and with its ships dealt with; ties
+   link every mission that turns on any of the tied bits.
+
+   GENERIC TO EV NOVA, NO DOM. LOAD ORDER: after nova-bits.js. */
+
+/* A mission's note as { story, key, step, num, rest, last, cutoff }, or
+   null for none. `key` is the storyline's name folded for grouping. */
+function novaStoryNote(note) {
+  const s = String(note || '').replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  const m = /^(.*?)\s*(\d+)([A-Za-z]*)(?![0-9])\s*(.*)$/.exec(s);
+  const story = (m && m[1].trim() ? m[1] : m ? 'untitled' : s).replace(/\s+/g, ' ').trim();
+  return {
+    story, key: story.toLowerCase().replace(/[^a-z0-9]+/g, ''),
+    step: m ? m[2] + m[3] : null, num: m ? +m[2] : null, rest: m ? m[4].trim() : '',
+    last: /\bLAST\b/.test(s), cutoff: /unregistered cutoff/i.test(s),
+  };
+}
+
+/* A place code in words, as Mac 1.1.1 reads it: { text, stellar, system,
+   govt } with the ids a page can link, any of them absent. `field` is
+   'avail' (AvailStel, IsMissionAvailable 0x9b152), 'travel' or 'return'
+   (TravelStel and ReturnStel, RandomizeOneMission 0xa14d1 and
+   SelectMissionStellar 0x9a26a), 'ship' (ShipSyst, LoadCurrentMissionData
+   0xa0a38 and SelectMissionSystem 0x9b993) or 'aux' (AuxShipSyst,
+   ValidAuxShipSystem 0x992b5). `{g}` in the text is where the government
+   goes, kept as 128 + index; 9999 gives 127, no government. js/nova-fields.js has the same in its notes. */
+function novaMissionPlace(u, field, v) {
+  const g = (off, what) => ({ text: what, govt: 128 + v - off });
+  const govts = where => {
+    if (v >= 9999 && v <= 14999) return g(10000, `${where} of {g}`);
+    if (v >= 15000 && v <= 19999) return g(15000, `${where} of an ally of {g}`);
+    if (v >= 20000 && v <= 24999) return g(20000, `${where} of any government but {g}`);
+    if (v >= 25000 && v <= 29999) return g(25000, `${where} of an enemy of {g}`);
+    if (v >= 30000 && v <= 30999) return g(30000, `${where} of {g} or of one sharing a class with it`);
+    if (v >= 31000 && v <= 31999) return g(31000, `${where} of neither {g} nor one sharing a class with it`);
+    return null;
+  };
+  if (field === 'avail') {
+    if (v <= -32000) return { text: 'nowhere: never offered' };
+    if (v === -1) return { text: 'anywhere' };
+    if (v >= 128 && v <= 4999) return { text: 'stellar', stellar: v };
+    if (v >= 5000 && v <= 9998) return { text: 'a stellar in a system linked to', system: 128 + v - 5000 };
+    return govts('a stellar') || { text: 'nowhere: never offered' };
+  }
+  if (field === 'travel' || field === 'return') {
+    if (v === -1) return { text: field === 'travel' ? 'no destination' : "TravelStel's stellar" };
+    if (v === -2) return { text: 'a random stellar without spöb Flags 0x20' };
+    if (v === -3) return { text: 'a random stellar with spöb Flags 0x20 and without 0x10' };
+    if (v >= 128 && v <= 2175) return { text: 'stellar', stellar: v };
+    return govts('a random stellar') || { text: 'the stellar where it is accepted' };
+  }
+  if (field === 'ship') {
+    const words = { '-1': 'the system you accept it in', '-2': 'a random system, not that one', '-3': "TravelStel's system, or ReturnStel's",
+      '-4': "ReturnStel's system", '-5': 'a random system linked to the one you accept it in', '-6': 'whatever system you are in' };
+    if (words[v]) return { text: words[v] };
+    if (v >= 128 && v <= 9998) return { text: 'system', system: v };
+    return govts('a random system') || { text: 'nowhere' };
+  }
+  if (field === 'aux') {
+    const words = { '-1': 'any system', '-6': 'any system', '-2': "TravelStel's system", '-3': "ReturnStel's system" };
+    if (words[v]) return { text: words[v] };
+    if (v >= 128 && v <= 2175) return { text: 'system', system: v };
+    if (v >= 5000 && v <= 9998) return { text: 'the system, or one linked to it:', system: 128 + v - 5000 };
+    return govts('systems') || { text: 'nowhere' };
+  }
+  return { text: 'code ' + v };
+}
+/* PayVal in words, as ApplyMissionPay 0x98326 and DoMissionAccept 0xa1b11
+   read it: { text, govt } with a government's id where one is named. */
+function novaMissionPay(v) {
+  if (v > 0) return { text: v.toLocaleString('en-US') + ' credits' };
+  if (v <= -10000 && v >= -19999) return { text: 'records below 0 cleared in the systems of {g}', govt: -v - 10000 };
+  if (v <= -20000 && v >= -29999) return { text: 'records below 0 cleared in the systems of an ally of {g}', govt: -v - 20000 };
+  if (v <= -30000 && v >= -39999) return { text: 'records below 0 cleared in the systems of {g} or of one sharing a class with it', govt: -v - 30000 };
+  if (v <= -40001 && v >= -40099) return { text: `${-v - 40000}% of your credits taken` };
+  if (v < -50000) return { text: `${(-v - 50000).toLocaleString('en-US')} credits taken on accepting` };
+  return { text: 'nothing' };
+}
+// AvailLoc's places, as OfferMissionFromPort 0xa369e and the port dialogs set them.
+const NOVA_AVAIL_LOC = ['the Mission BBS', 'the bar', 'a ship (a përs offers it)', 'the spaceport, on landing', 'the Trade Center', 'the shipyard', 'the outfitter'];
+
+/* Every mission, and the storylines: { byId: Map of id to mission, stories:
+   Map of key to { key, name, missions } }. A mission is { id, name, note,
+   story (novaStoryNote), rec, needs: [{ n, on }], turnsOn: Set of bits
+   (accepted, completed, ships done), starts: [ids], next: [ids],
+   prev: [ids], startedBy: [ids] }. A storyline's missions are in step order, then by id. */
+function novaMissions(game) {
+  const byId = new Map();
+  for (const rec of novaAll(game, 'mïsn')) {
+    const parts = novaNameParts(rec.name);
+    const m = { id: rec.id, name: parts.name, note: parts.note, story: novaStoryNote(parts.note), rec,
+                needs: ncbTestNeeds(rec.AvailBits || ''), turnsOn: new Set(), starts: [], next: [], prev: [], startedBy: [] };
+    for (const f of ['OnAccept', 'OnSuccess', 'OnShipDone']) for (const o of ncbSetOps(rec[f] || '')) {
+      if (o.op === 'set') m.turnsOn.add(o.n);
+      if (o.letter === 'S' && !m.starts.includes(o.n)) m.starts.push(o.n);
+    }
+    byId.set(rec.id, m);
+  }
+  // who turns on each bit; each mission waits for the rarest bit it needs on
+  const setters = new Map();
+  for (const m of byId.values()) for (const n of m.turnsOn) { if (!setters.has(n)) setters.set(n, []); setters.get(n).push(m.id); }
+  const next = new Map([...byId.keys()].map(id => [id, new Set()]));
+  for (const m of byId.values()) {
+    for (const id of m.starts) if (byId.has(id) && id !== m.id) { next.get(m.id).add(id); byId.get(id).startedBy.push(m.id); }
+    const waits = m.needs.filter(x => x.on && setters.has(x.n)), fewest = Math.min(...waits.map(x => setters.get(x.n).length));
+    for (const x of waits) if (setters.get(x.n).length === fewest) for (const id of setters.get(x.n)) if (id !== m.id) next.get(id).add(m.id);
+  }
+  for (const m of byId.values()) {
+    m.next = [...next.get(m.id)].sort((a, b) => a - b);
+    for (const id of m.next) byId.get(id).prev.push(m.id);
+  }
+  const stories = new Map();
+  for (const m of byId.values()) {
+    if (!m.story) continue;
+    const k = m.story.key;
+    if (!stories.has(k)) stories.set(k, { key: k, name: m.story.story, missions: [] });
+    stories.get(k).missions.push(m);
+  }
+  for (const s of stories.values()) {
+    s.missions.sort((a, b) => (a.story.num ?? Infinity) - (b.story.num ?? Infinity) || String(a.story.step).localeCompare(String(b.story.step)) || a.id - b.id);
+    // the name as most of its notes spell it
+    const count = new Map();
+    for (const m of s.missions) count.set(m.story.story, (count.get(m.story.story) || 0) + 1);
+    s.name = [...count].sort((a, b) => b[1] - a[1])[0][0];
+  }
+  return { byId, stories };
+}
+
+/* A storyline's missions laid out as a chart: { nodes: [{ id, layer, pos }],
+   edges: [{ from, to, back }], width, layers }. A mission is a row below
+   every mission of the storyline that leads to it (the longest such path
+   from one nothing leads to; a loop is cut where it closes, and the edge
+   that closes it is marked back); each row is ordered by the mean place
+   of its neighbours, a few sweeps down and up, to keep lines short
+   (Sugiyama, Tagawa and Toda's layered drawing, doc/credits.md). */
+function novaStoryLayout(missions) {
+  const ids = missions.map(m => m.id), inS = new Set(ids), byId = new Map(missions.map(m => [m.id, m]));
+  const edges = [];
+  for (const m of missions) for (const t of m.next) if (inS.has(t) && t !== m.id) edges.push({ from: m.id, to: t, back: false });
+  // cut loops: a depth-first walk in step order marks the edges that return to the path
+  const state = new Map(), out = new Map(ids.map(id => [id, []]));
+  for (const e of edges) out.get(e.from).push(e);
+  const walk = id => {
+    state.set(id, 1);
+    for (const e of out.get(id)) {
+      const s = state.get(e.to);
+      if (s === 1) e.back = true; else if (!s) walk(e.to);
+    }
+    state.set(id, 2);
+  };
+  for (const id of ids) if (!state.get(id)) walk(id);
+  // rows: the longest path from a mission nothing leads to, over the edges that go forward
+  const layer = new Map(), into = new Map(ids.map(id => [id, []]));
+  for (const e of edges) if (!e.back) into.get(e.to).push(e.from);
+  const rowOf = id => {
+    if (layer.has(id)) return layer.get(id);
+    layer.set(id, 0);
+    const v = into.get(id).length ? 1 + Math.max(...into.get(id).map(rowOf)) : 0;
+    layer.set(id, v);
+    return v;
+  };
+  ids.forEach(rowOf);
+  const rows = [];
+  for (const id of ids) (rows[layer.get(id)] = rows[layer.get(id)] || []).push(id);
+  const pos = new Map();
+  const place = () => rows.forEach(r => r.forEach((id, i) => pos.set(id, i)));
+  place();
+  const nb = (id, up) => edges.filter(e => !e.back && (up ? e.to === id : e.from === id)).map(e => (up ? e.from : e.to));
+  for (let sweep = 0; sweep < 4; sweep++) {
+    const down = sweep % 2 === 0;
+    const order = down ? rows.map((r, i) => i).slice(1) : rows.map((r, i) => i).reverse().slice(1);
+    for (const i of order) {
+      const r = rows[i];
+      if (!r) continue;
+      const bary = id => { const n = nb(id, down); return n.length ? n.reduce((a, x) => a + pos.get(x), 0) / n.length : pos.get(id); };
+      r.sort((a, b) => bary(a) - bary(b) || pos.get(a) - pos.get(b));
+      r.forEach((id, k) => pos.set(id, k));
+    }
+  }
+  return { nodes: ids.map(id => ({ id, layer: layer.get(id), pos: pos.get(id) })), edges, width: Math.max(1, ...rows.map(r => (r ? r.length : 0))), layers: rows.length, byId };
+}
+
+/* The whole game: how the storylines join. { stories, leads, shuts, people,
+   events }, each join a list of what makes it:
+     leads: a mission of one storyline leads to a mission of another (LEADS
+       TO above): [{ from, to, via: [[mission, mission]] }];
+     shuts: a mission of one turns on a bit that an opening of another (one
+       no other mission of its storyline leads to) needs off:
+       [{ from, to, via: [[mission, opening, bit]] }];
+     people: a përs whose ActivateOn needs on a bit a storyline's missions
+       turn on (it appears with that storyline) or needs it off (it goes):
+       [{ pers, appears: [{ story, via: [[mission, bit]] }], goes }] (no
+       shipped përs offers a storyline's mission, its LinkMission);
+     events: a crön that turns on, at its start or end, a bit a storyline's
+       missions need on (opens) or off (shuts): [{ cron, opens: [{ story,
+       via: [[mission, bit]] }], shuts }].
+   A storyline is { key, name, missions }; stories are the keys of
+   M.stories. */
+function novaGameOverview(game, M) {
+  const storyOf = id => { const m = M.byId.get(id); return m && m.story ? m.story.key : null; };
+  const joins = () => new Map(), add = (map, a, b, why) => { const k = a + '\u0000' + b; if (!map.has(k)) map.set(k, { from: a, to: b, via: [] }); map.get(k).via.push(why); };
+  const leads = joins(), shuts = joins();
+  for (const m of M.byId.values()) {
+    const a = storyOf(m.id);
+    if (a) for (const t of m.next) { const b = storyOf(t); if (b && b !== a) add(leads, a, b, [m.id, t]); }
+  }
+  const openings = new Map([...M.stories.values()].map(s => [s.key, s.missions.filter(m => !m.prev.some(p => storyOf(p) === s.key))]));
+  for (const m of M.byId.values()) {
+    const a = storyOf(m.id);
+    if (a) for (const [b, list] of openings) if (b !== a) for (const o of list) for (const x of o.needs) if (!x.on && m.turnsOn.has(x.n)) add(shuts, a, b, [m.id, o.id, x.n]);
+  }
+  // who turns on each bit, by storyline
+  const turners = new Map();
+  for (const m of M.byId.values()) { const k = storyOf(m.id); if (k) for (const n of m.turnsOn) { if (!turners.has(n)) turners.set(n, []); turners.get(n).push(m); } }
+  const people = [];
+  for (const p of novaAll(game, 'përs')) {
+    const appears = joins(), goes = joins();
+    for (const x of ncbTestNeeds(p.ActivateOn || '')) for (const m of turners.get(x.n) || []) add(x.on ? appears : goes, p.id, storyOf(m.id), [m.id, x.n]);
+    if (appears.size || goes.size) people.push({ pers: p.id, appears: [...appears.values()].map(j => ({ story: j.to, via: j.via })), goes: [...goes.values()].map(j => ({ story: j.to, via: j.via })) });
+  }
+  const events = [];
+  for (const c of novaAll(game, 'crön')) {
+    const on = new Set();
+    for (const f of ['OnStart', 'OnEnd']) for (const o of ncbSetOps(c[f] || '')) if (o.op === 'set') on.add(o.n);
+    if (!on.size) continue;
+    const opens = joins(), shut = joins();
+    for (const m of M.byId.values()) { const k = storyOf(m.id); if (k) for (const x of m.needs) if (on.has(x.n)) add(x.on ? opens : shut, c.id, k, [m.id, x.n]); }
+    if (opens.size || shut.size) events.push({ cron: c.id, opens: [...opens.values()].map(j => ({ story: j.to, via: j.via })), shuts: [...shut.values()].map(j => ({ story: j.to, via: j.via })) });
+  }
+  return { stories: [...M.stories.keys()], leads: [...leads.values()], shuts: [...shuts.values()], people, events };
+}
