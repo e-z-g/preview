@@ -1,0 +1,477 @@
+/* page-solve.js -- a puzzle taken apart: a band, which can be changed
+   Zoombini by Zoombini, a puzzle set for it, which can be changed where it
+   hides something, and what can be done: with the answer known, the most
+   that can cross and the ways, the simplest first; with it unknown, the
+   play that guarantees the most, to be walked through move by move.
+   =========================================================================
+
+   The puzzle's file (zb-puzzle-<archive>.js) has the rest: deal, form,
+   edit, solve, strategy and their diagrams; this file is the controls and
+   the drawing. The band is drawn from ZOOMBINI.MHK (zb-snoid.js), fetched
+   from archive.org when it is not open (24 MB); until then a diagram shows
+   numbered placeholders.
+
+   The address has every setting, so a link opens the same puzzle:
+     #solve=BRIDGE&level=3&deal=4242        the band and puzzle from a seed
+     &size=11                               a band of fewer than 16, dealt
+     &band=2552...                          a band given, four digits each
+     &set=<json>                            the puzzle's fields as changed
+     &view=unknown&knows=form&path=0.1      the strategy, walked
+     &pick=2                                a solution other than the first
+     #solve=BRIDGE&level=max&band=...&deal=N  VVH Max: level 4
+                                            dealt from N, the seed of the
+                                            puzzle's deal (zbDealOne); with no deal,
+                                            the hardest is searched for
+
+   The page's script: DOM here. LOAD ORDER: after page-browse.js, whose
+   $, esc, ARCHIVES, ensureBytes, openedArchive and sharedColors it uses;
+   page-browse.js's route() calls solveRoute. */
+
+const SVIEW = { key: null, level: 1, seed: 1, size: 16, band: null, set: null, view: 'known', knows: 'program', path: [], pick: 0, stage: 'diagram' };
+let SDEALT = null, SSOLVED = null, SSTRAT = null, SNODES = [], SERROR = null, SPUZZLE = null;
+/* VVH Max: the search under way ({ search, token }), the
+   last one's progress, and the dealt puzzle's score. */
+let SHARD = null, SHARDLAST = null, SHARDSCORE = null;
+const SSPRITES = new Map();       // 'z:2552' or 't:hair:1' -> { url, width, height, ox, oy }
+
+function isSolveHash() { return /^#solve=/.test(location.hash); }
+/* The level whose rules are played: VVH Max is the fourth's. */
+function solveRules() { return SVIEW.level === 5 ? ZB_HARDEST_LEVEL : SVIEW.level; }
+
+/* ---- the address --------------------------------------------------------- */
+
+function solveHashFor() {
+  const v = SVIEW, q = [`solve=${v.key}`];
+  if (v.level !== 1) q.push(`level=${v.level === 5 ? 'max' : v.level}`);
+  if (v.seed) q.push(`deal=${v.seed}`);
+  if (v.band) q.push(`band=${zbBandCode(v.band)}`);
+  else if (v.size !== 16) q.push(`size=${v.size}`);
+  if (v.set) q.push(`set=${encodeURIComponent(JSON.stringify(v.set))}`);
+  if (v.view === 'unknown') q.push('view=unknown');
+  if (v.knows !== 'program') q.push(`knows=${v.knows}`);
+  if (v.path.length) q.push(`path=${v.path.join('.')}`);
+  if (v.pick) q.push(`pick=${v.pick}`);
+  if (v.stage !== 'diagram') q.push(`stage=${v.stage}`);
+  return '#' + q.join('&');
+}
+function solveWriteHash(replace = true) {
+  const h = solveHashFor();
+  if (location.hash === h) return;
+  if (replace) history.replaceState(null, '', h); else history.pushState(null, '', h);
+}
+function solveApplyHash() {
+  const q = new URLSearchParams(location.hash.slice(1));
+  const key = (q.get('solve') || '').toUpperCase();
+  SVIEW.key = ZB_PUZZLES.has(key) ? key : 'BRIDGE';
+  // (VVH Max is level=max; level=5 was its address until 13 October 2026,
+  // and is still read, though the name level 5 is now the variants')
+  const level = q.get('level') === 'max' ? 5 : +q.get('level');
+  SVIEW.level = level >= 1 && level <= 5 ? level : 1;
+  const seed = +q.get('deal');
+  SVIEW.seed = seed > 0 && seed < 2 ** 32 ? seed : SVIEW.level === 5 ? 0 : 1 + Math.floor(Math.random() * 0x7fffffff);
+  const size = +q.get('size');
+  SVIEW.size = size >= 1 && size <= 16 ? size : 16;
+  SVIEW.band = zbBandFromCode(q.get('band'));
+  try { SVIEW.set = q.get('set') ? JSON.parse(q.get('set')) : null; } catch (e) { SVIEW.set = null; }
+  SVIEW.view = q.get('view') === 'unknown' ? 'unknown' : 'known';
+  SVIEW.knows = q.get('knows') === 'form' ? 'form' : 'program';
+  SVIEW.path = (q.get('path') || '').split('.').filter(s => /^\d+$/.test(s)).map(Number);
+  SVIEW.pick = Math.max(0, +q.get('pick') || 0);
+  SVIEW.stage = ['scene', 'layout'].includes(q.get('stage')) ? q.get('stage') : 'diagram';
+}
+
+/* ---- the puzzle, worked out ------------------------------------------------ */
+
+/* The archives a view needs that are not in yet: the puzzle's layouts,
+   and ZOOMBINI's sprites, which a diagram uses when they are open and
+   otherwise replaces with numbered placeholders. */
+function solveMissingArchives() {
+  const out = [];
+  for (const name of zbDealArchives(SVIEW.key)) {
+    const e = ARCHIVES.get(name);
+    if (!e) return { missing: name };
+    if (!e.bytes) out.push(e);
+  }
+  return { fetch: out };
+}
+const solveOpen = name => openedArchive(ARCHIVES.get(name));
+
+/* Deal, edit, solve: what the panel and the stage show. */
+function solveCompute() {
+  const v = SVIEW, P = ZB_PUZZLES.get(v.key);
+  SPUZZLE = P; SERROR = null; SSOLVED = null; SSTRAT = null; SNODES = []; SHARDSCORE = null;
+  const arc = P.archive ? solveOpen(P.archive) : undefined, level = solveRules();
+  try {
+    SDEALT = v.level === 5 ? zbDealOne(v.key, level, v.seed, solveHardBand(), solveOpen)
+      : v.band ? zbDealFor(v.key, v.level, v.seed, v.band, solveOpen) : zbDealAt(v.key, v.level, v.seed, v.size, solveOpen);
+  } catch (e) { SERROR = `The puzzle could not be dealt (${e.message}).`; SDEALT = null; return; }
+  if (v.level === 5) try { SHARDSCORE = zbHardestScore(v.key, SDEALT.band, SDEALT, solveOpen); } catch (e) { SHARDSCORE = null; }
+  let state = SDEALT.state;
+  if (v.set && P.edit) {
+    try { state = P.edit(level, SDEALT.band, state, v.set, arc); }
+    catch (e) { SERROR = e.message; }
+  }
+  SDEALT.edited = state;
+  if (state && state.stuck) { SERROR = SDEALT.setup.join(' '); return; }
+  if (P.solve) {
+    try { SSOLVED = P.solve(level, SDEALT.band, state, arc, { budget: 1500 }); }
+    catch (e) { SSOLVED = { error: e.message }; }
+  }
+}
+function solveStrategy() {
+  const v = SVIEW, P = SPUZZLE;
+  if (!P.strategy || !SDEALT) return;
+  if (!SSTRAT) {
+    const arc = P.archive ? solveOpen(P.archive) : undefined;
+    try { SSTRAT = P.strategy(solveRules(), SDEALT.band, arc, { budget: 1500, knows: v.knows, state: SDEALT.edited || SDEALT.state }); SNODES = [SSTRAT.root]; }
+    catch (e) { SSTRAT = { error: e.message }; SNODES = []; }
+  }
+  /* Down the path the address gives, as far as it goes. */
+  while (SNODES.length <= v.path.length && SNODES.length && !SSTRAT.error) {
+    const node = SNODES[SNODES.length - 1], o = node.outcomes[v.path[SNODES.length - 1]];
+    if (!o) { v.path = v.path.slice(0, SNODES.length - 1); break; }
+    SNODES.push(o.next());
+  }
+}
+
+/* ---- sprites ---------------------------------------------------------------- */
+
+function solvePalette() {
+  const pal = zbPalette(null), sc = sharedColors();
+  if (sc) sc.colors.forEach((c, i) => { pal[10 + i] = [c[0], c[1], c[2]]; });
+  return pal;
+}
+function solveSheet() {
+  const e = ARCHIVES.get('ZOOMBINI');
+  if (!e || !e.bytes) return null;
+  const arc = openedArchive(e);
+  try { return arc ? zbSnoidSheet(arc) : null; } catch (err) { return null; }
+}
+function solveSprite(key, make) {
+  if (SSPRITES.has(key)) return SSPRITES.get(key);
+  const sheet = solveSheet();
+  if (!sheet) return null;
+  const img = make(sheet), c = indexedCanvas(img, solvePalette(), true);
+  const s = { url: c.toDataURL(), width: img.width, height: img.height, ox: img.ox, oy: img.oy };
+  SSPRITES.set(key, s);
+  return s;
+}
+function solveSprites(band) {
+  return {
+    zoombini: i => band[i] ? solveSprite('z:' + zbBandCode([band[i]]), sheet => zbZoombiniImage(sheet, band[i])) : null,
+    trait: (kind, value) => solveSprite(`t:${kind}:${value}`, sheet => zbTraitImage(sheet, kind, value)),
+  };
+}
+function solveZoombiniImg(z) {
+  const s = solveSprite('z:' + zbBandCode([z]), sheet => zbZoombiniImage(sheet, z));
+  return s ? `<img class="zb" src="${s.url}" width="${s.width}" height="${s.height}" alt="">` : `<span class="zb none"></span>`;
+}
+
+/* ---- the panel -------------------------------------------------------------- */
+
+function solveBandHtml(band) {
+  const pick = (i, kind, v) => `<select data-trait="${kind}" data-i="${i}" title="${kind}">${ZB_TRAIT_SHORT[kind].map((n, k) => `<option value="${k + 1}"${k + 1 === v ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>`;
+  return '<div class="sband">' + band.map((z, i) => `<div class="szb"><span class="n">${i + 1}</span>${solveZoombiniImg(z)}`
+    + `<span class="traits">${ZB_TRAIT_KINDS.map(k => pick(i, k, z[k])).join('')}</span>`
+    + (band.length > 1 ? `<button class="x" data-drop="${i}" title="Leave this Zoombini out">×</button>` : '') + '</div>').join('') + '</div>'
+    + `<div class="actions">${band.length < 16 ? '<button data-sact="add">Add</button>' : ''} <button data-sact="dice">Another band</button>`
+    + `${SVIEW.band && SVIEW.level !== 5 ? ' <button data-sact="dealband">The dealt band</button>' : ''}</div>`;
+}
+
+function solveFormHtml(P, band) {
+  if (!P.form || !SDEALT) return '';
+  let fields;
+  try { fields = P.form(solveRules(), band, SDEALT.edited || SDEALT.state, P.archive ? solveOpen(P.archive) : undefined); }
+  catch (e) { return `<p class="bad">${esc(e.message)}</p>`; }
+  return '<div class="sform">' + fields.map(f => {
+    if (f.kind === 'note') return `<p class="note">${esc(f.note)}</p>`;
+    const opt = (o, on) => `<option value="${esc(o.value)}"${on ? ' selected' : ''}>${esc(o.label)}</option>`;
+    let ctl;
+    if (f.kind === 'choice') ctl = `<select data-field="${f.key}">${f.options.map(o => opt(o, String(o.value) === String(f.value))).join('')}</select>`;
+    else if (f.kind === 'several') ctl = `<span class="several">${f.options.map(o => `<label><input type="checkbox" data-field="${f.key}" value="${esc(o.value)}"${f.value.map(String).includes(String(o.value)) ? ' checked' : ''}> ${esc(o.label)}</label>`).join('')}</span>`;
+    else if (f.kind === 'order') ctl = `<span class="order">${f.value.map((val, k) => `<select data-field="${f.key}" data-at="${k}">${f.options.map(o => opt(o, String(o.value) === String(val))).join('')}</select>`).join('')}</span>`;
+    else ctl = `<span class="note">${esc(String(f.value))}</span>`;
+    return `<div class="field"><span class="label">${esc(f.label || '')}</span>${ctl}${f.note ? `<small>${esc(f.note)}</small>` : ''}</div>`;
+  }).join('') + '</div>';
+}
+
+function solvePanel() {
+  const v = SVIEW, P = SPUZZLE, place = ZB_PLACE_BY_KEY.get(v.key);
+  const band = SDEALT ? SDEALT.band : (v.band || []);
+  let html = `<h2>${esc(place.name)}</h2><div class="sub">${esc(P.about)}</div>`;
+  html += `<div class="actions"><a class="btn" href="#place=${v.key}${solveRules() !== 1 ? '&level=' + solveRules() : ''}">On the map</a>`
+    + ` <select id="spuzzle" title="Another puzzle">${[...ZB_PUZZLES.keys()].map(k => `<option value="${k}"${k === v.key ? ' selected' : ''}>${esc(ZB_PLACE_BY_KEY.get(k).name)}</option>`).join('')}</select>`
+    + ` <select id="slevel" title="The level">${[...ZB_LEVELS, ZB_HARDEST_NAME].map((n, i) => `<option value="${i + 1}"${i + 1 === v.level ? ' selected' : ''}>${i < 4 ? `Level ${i + 1}: ` : ''}${esc(n)}</option>`).join('')}</select></div>`;
+  if (!solveSheet()) {
+    const e = ARCHIVES.get('ZOOMBINI');
+    html += e ? (FETCHING.has('ZOOMBINI') ? '<p class="note">Fetching zoombini.mhk for the Zoombinis’ pictures…</p>'
+      : `<p class="note">The Zoombinis’ pictures are in zoombini.mhk. <a data-sact="sprites">Fetch it</a> (24 MB). Until then they are shown as numbers.</p>`)
+      : '<p class="note">ZOOMBINI.MHK is not open, so the Zoombinis are shown as numbers.</p>';
+  }
+
+  html += `<details class="sec" open><summary>The band (${band.length})</summary>${solveBandHtml(band)}</details>`;
+
+  html += `<details class="sec" open><summary>The puzzle</summary>`;
+  if (v.level === 5) html += solveHardHtml(band);
+  if (SDEALT) html += SDEALT.setup.map(l => `<p class="note">${esc(l)}</p>`).join('');
+  html += solveFormHtml(P, band);
+  if (SERROR) html += `<p class="bad">${esc(SERROR)}</p>`;
+  html += `<div class="actions"><button data-sact="redeal">Deal again</button>${v.set ? ' <button data-sact="unset">As dealt</button>' : ''}</div></details>`;
+
+  html += `<div class="tabs"><a data-sview="known" class="${v.view === 'known' ? 'on' : ''}">Answer known</a>`
+    + `<a data-sview="unknown" class="${v.view === 'unknown' ? 'on' : ''}">Answer unknown</a></div>`;
+  if (v.view === 'known') html += solveKnownHtml(band);
+  else html += solveUnknownHtml(band);
+  html += `<p class="note">${esc(P.source)}</p>`;
+  $('spanel').innerHTML = html;
+}
+
+function solveKnownHtml(band) {
+  const s = SSOLVED;
+  if (!s) return '<p class="note">Nothing to solve.</p>';
+  if (s.error) return `<p class="bad">The puzzle could not be solved (${esc(s.error)}).</p>`;
+  let html = `<p class="big"><b>${s.most}</b> of ${band.length} can cross${s.exact ? '' : ' (the best found)'}${s.ways != null ? `, in ${s.ways.toLocaleString()} way${s.ways === 1 ? '' : 's'}` : ''}.</p>`;
+  html += '<ol class="sols">' + s.solutions.map((sol, k) => `<li class="${k === SVIEW.pick ? 'on' : ''}" data-pick="${k}"><b>${k ? '' : 'Simplest: '}${esc(sol.title)}</b>`
+    + (k === SVIEW.pick ? sol.steps.map(t => `<p>${esc(t)}</p>`).join('') : '') + '</li>').join('') + '</ol>';
+  html += (s.notes || []).map(n => `<p class="note">${esc(n)}</p>`).join('');
+  return html;
+}
+
+function solveUnknownHtml(band) {
+  const P = SPUZZLE;
+  if (!P.strategy) return '<p class="note">Nothing is hidden in this puzzle, so “Answer known” covers it fully.</p>';
+  solveStrategy();
+  const st = SSTRAT;
+  if (!st) return '';
+  if (st.error) return `<p class="bad">The strategy could not be worked out (${esc(st.error)}).</p>`;
+  let html = `<div class="field"><span class="label">The player knows</span><select id="sknows"><option value="program"${SVIEW.knows === 'program' ? ' selected' : ''}>how the program deals</option>`
+    + `<option value="form"${SVIEW.knows === 'form' ? ' selected' : ''}>only the rule’s form</option></select></div>`;
+  html += `<p class="big"><b>${st.guaranteed}</b> of ${band.length} are guaranteed to cross${st.exact ? '' : ' (a lower bound)'}, whichever of the ${st.hypotheses.toLocaleString()} hypotheses is true.</p>`;
+  const node = SNODES[SNODES.length - 1];
+  html += '<div class="walk">';
+  html += `<div class="crumbs"><a data-back="0">Start</a>${SVIEW.path.map((o, k) => ` › <a data-back="${k + 1}">${esc(SNODES[k].outcomes[o].label.replace(/ \(.*\)$/, ''))}</a>`).join('')}</div>`;
+  html += `<p class="move">${esc(node.move)}</p>`;
+  /* A few outcomes as buttons; many (a mudball's every landing) as a list. */
+  if (node.outcomes.length > 6) html += `<div class="field"><span class="label">What happens</span><select id="sout"><option value="">${node.outcomes.length} outcomes…</option>`
+    + node.outcomes.map((o, k) => `<option value="${k}">${esc(o.label)}</option>`).join('') + '</select></div>';
+  else if (node.outcomes.length) html += '<div class="actions">' + node.outcomes.map((o, k) => `<button data-out="${k}">${esc(o.label)}</button>`).join(' ') + '</div>';
+  html += `<p class="note">${node.left != null ? `${node.left.toLocaleString()} hypotheses still possible, ` : ''}${node.crossed} across so far.</p></div>`;
+  html += (st.notes || []).map(n => `<p class="note">${esc(n)}</p>`).join('');
+  return html;
+}
+
+/* ---- the stage ---------------------------------------------------------------- */
+
+function solveStage() {
+  if (SVIEW.stage === 'layout' && !layoutEditor(SVIEW.key)) SVIEW.stage = 'diagram';
+  for (const a of document.querySelectorAll('#stabs a')) {
+    a.classList.toggle('on', a.dataset.stage === SVIEW.stage);
+    if (a.dataset.stage === 'layout') a.hidden = !layoutEditor(SVIEW.key);
+  }
+  if (SVIEW.stage === 'scene') return solveScene();
+  if (SVIEW.stage === 'layout') return solveLayout();
+  const band = SDEALT ? SDEALT.band : [];
+  let d = null, cap = '';
+  if (SVIEW.view === 'known' && SSOLVED && SSOLVED.solutions && SSOLVED.solutions.length) {
+    const sol = SSOLVED.solutions[Math.min(SVIEW.pick, SSOLVED.solutions.length - 1)];
+    d = sol.diagram; cap = sol.title;
+  } else if (SVIEW.view === 'unknown' && SNODES.length) {
+    const node = SNODES[SNODES.length - 1];
+    d = node.diagram; cap = node.move;
+  }
+  $('sdiagram').innerHTML = d ? zbDiagramSvg(d, solveSprites(band)) : `<p class="note">${esc(SERROR || 'No diagram.')}</p>`;
+  $('scaption').textContent = cap;
+}
+
+/* The scene: the place's picture at the level, and the band where the
+   program puts it on coming there (zbBandWaiting), standing and facing
+   right, as the band comes in. It needs the place's archive and
+   ZOOMBINI's, which it fetches when the visitor opens the scene. */
+function solveScene() {
+  const key = SVIEW.key, place = ZB_PLACE_BY_KEY.get(key), band = SDEALT ? SDEALT.band : [];
+  const home = ARCHIVES.get(key), z = ARCHIVES.get('ZOOMBINI');
+  const waiting = zbBandWaiting(key, band);
+  $('scaption').textContent = waiting ? `The band waits at ${place.name}, in the spots where the program puts it on arrival (from ZOOMBINI.EXE).`
+    : `At ${place.name} the band stands off the screen until the game’s toad code draws it, so this page does not show it.`;
+  const missing = [home, z].filter(e => !e || !e.bytes);
+  if (missing.some(e => !e)) { $('sdiagram').innerHTML = `<p class="note">The scene needs ${esc(key.toLowerCase())}.mhk and zoombini.mhk, and they are not both open.</p>`; return; }
+  if (missing.length) {
+    $('sdiagram').innerHTML = missing.some(e => FETCHING.has(e.name)) ? '<p class="note">Fetching…</p>'
+      : `<p class="note">The scene is drawn from ${missing.map(e => esc(e.name.toLowerCase()) + '.mhk').join(' and ')}. <a data-sact="scene">Fetch ${missing.length > 1 ? 'them' : 'it'} from archive.org</a>${missing.includes(z) ? ' (24 MB)' : ''}.</p>`;
+    return;
+  }
+  const arc = openedArchive(home), zarc = openedArchive(z);
+  const pic = zbPlacePicture(arc, key, solveRules()), pal = paletteFor(home, arc, pic.palette).pal;
+  const c = document.createElement('canvas');
+  c.width = 640; c.height = 480; c.className = 'scene';
+  const g = c.getContext('2d');
+  for (const l of pic.layers) g.drawImage(indexedCanvas(decodeBitmapResource(arc.get('tBMP', l.id)).frames[l.frame], pal, false), l.x, l.y);
+  if (waiting) {
+    const sheet = zbSnoidSheet(zarc, ZB_WAITING[key].small ? 'small' : 'zoombini');
+    for (const w of waiting) {
+      const im = zbZoombiniImage(sheet, w.z);
+      g.drawImage(indexedCanvas(im, pal, true), w.x - im.ox, w.y - im.oy);
+    }
+  }
+  $('sdiagram').innerHTML = '';
+  $('sdiagram').appendChild(c);
+}
+
+/* ---- VVH Max ---------------------------------------------------------- */
+
+/* The band a fifth level is dealt for: the one given, or one dealt from
+   the seed as the Isle's dice would. */
+function solveHardBand() { return SVIEW.band || zbDealBand(zbRandom(SVIEW.seed || 1), SVIEW.size); }
+
+function solveHardWords(score, n) {
+  if (!score) return '';
+  const across = score.crossed === score.guaranteed ? `${score.crossed} of ${n} are guaranteed to cross` : `${score.guaranteed} of ${n} are guaranteed to cross and ${score.crossed} cross against this deal`;
+  return `${score.all ? 'With the answer known, the whole band can cross' : `With the answer known, at most ${score.most} of ${n} can cross`}. Played for the worst case, ${across}`
+    + `${score.spent ? `, with ${score.spent} chance${score.spent === 1 ? '' : 's'} spent` : ''}`
+    + `.${score.ways !== Infinity ? ` There ${score.ways === 1 ? 'is 1 way' : `are ${score.ways.toLocaleString()} ways`} across, and the` : ' The'} simplest solution has ${score.steps} step${score.steps === 1 ? '' : 's'}.`;
+}
+function solveHardHtml(band) {
+  const last = SHARDLAST && SHARDLAST.key === SVIEW.key && SHARDLAST.seed === SVIEW.seed ? SHARDLAST : null;
+  let html = `<p class="note">This uses level 4’s rules, dealt for this band by the program from seed ${SVIEW.seed}. The seed is the random number generator’s state when the puzzle starts dealing.`
+    + `${last ? ` It is the hardest of ${last.distinct.toLocaleString()} different deal${last.distinct === 1 ? '' : 's'} (${last.tried.toLocaleString()} seeds tried${last.stopped ? ', stopped early' : ''}).` : ''}</p>`;
+  if (last && last.distinct === 1) html += '<p class="note">Every seed deals this puzzle the same way, because nothing in it is drawn at random.</p>';
+  if (SHARDSCORE) html += `<p class="note">${esc(solveHardWords(SHARDSCORE, band.length))}</p>`;
+  return html;
+}
+
+/* Deal level 4 over and over for the band, a slice at a time, and keep
+   the hardest; then show it as any dealt puzzle. */
+function solveHardSearch() {
+  const v = SVIEW, key = v.key, band = solveHardBand(), token = {};
+  v.band = band;
+  const search = zbHardestSearch(key, band, solveOpen, { from: 1 + Math.floor(Math.random() * 0x7fffffff) });
+  SHARD = { token, search, stop: false };
+  const show = p => {
+    $('spanel').innerHTML = `<h2>${esc(ZB_PLACE_BY_KEY.get(key).name)}: ${esc(ZB_HARDEST_NAME)}</h2>`
+      + `<p class="note working">Dealing level 4 for this band again and again to find the hardest deal, with ${p.tried.toLocaleString()} seeds tried and ${p.distinct.toLocaleString()} different deals so far.</p>`
+      + (p.best ? `<p class="note">Hardest so far: ${esc(solveHardWords(p.best.score, band.length))}</p>` : '')
+      + '<div class="actions"><button data-sact="hardstop">Stop</button></div>';
+  };
+  const step = () => {
+    if (!SHARD || SHARD.token !== token || !isSolveHash()) return;
+    const p = search.run(150);
+    if (!p.done && !SHARD.stop) { show(p); return setTimeout(step, 0); }
+    SHARD = null;
+    if (!p.best) {
+      $('spanel').innerHTML = `<p class="bad">No deal was found${p.error ? ` (${esc(p.error)})` : ''}.</p>`;
+      return;
+    }
+    v.seed = p.best.seed;
+    SHARDLAST = { key, seed: v.seed, tried: p.tried, distinct: p.distinct, stopped: !p.done };
+    solveWriteHash();
+    solveRoute();
+  };
+  show(search.progress());
+  setTimeout(step, 0);
+}
+
+/* ---- going there ---------------------------------------------------------------- */
+
+function solveRoute() {
+  SHARD = null;
+  solveApplyHash();
+  const place = ZB_PLACE_BY_KEY.get(SVIEW.key);
+  $('crumbs').innerHTML = `<a href="#scenario">Scenario</a><span class="sep">›</span><a href="#scenario/puzzles">Puzzles</a>${place ? `<span class="sep">›</span><span>${esc(place.name)}</span>` : ''}`;
+  const pending = solveMissingArchives();
+  if (pending.missing) {
+    $('spanel').innerHTML = `<p class="warn">This puzzle’s layout is in ${esc(pending.missing)}.MHK, which is not open.</p>`;
+    $('sdiagram').innerHTML = ''; return;
+  }
+  if (pending.fetch.length) {
+    $('spanel').innerHTML = `<p class="note">Fetching ${pending.fetch.map(e => esc(e.name.toLowerCase()) + '.mhk').join(' and ')} from archive.org…</p>`;
+    Promise.all(pending.fetch.map(ensureBytes)).then(() => { if (isSolveHash()) solveRoute(); });
+    return;
+  }
+  if (SVIEW.level === 5 && !SVIEW.seed) return solveHardSearch();
+  $('spanel').insertAdjacentHTML('afterbegin', '<p class="note working">Working it out…</p>');
+  setTimeout(() => {
+    solveCompute();
+    solveWriteHash();
+    solveDraw();
+  }, 20);
+}
+function solveDraw() {
+  const top = $('spanel').scrollTop;
+  solvePanel();
+  solveStage();
+  $('spanel').scrollTop = top;
+}
+/* A change that leaves the band and puzzle as they are: only the panel and stage drawn again. */
+function solveRedraw() { solveWriteHash(); solveDraw(); }
+/* A change to the band or the puzzle: worked out again. */
+function solveRedo() { SVIEW.path = []; SVIEW.pick = 0; solveWriteHash(); solveRoute(); }
+
+function wireSolve() {
+  const panel = $('spanel');
+  $('sstage').addEventListener('click', e => {
+    const a = e.target.closest('[data-stage],[data-sact="scene"]');
+    if (!a) return;
+    e.preventDefault();
+    if (a.dataset.stage) { SVIEW.stage = a.dataset.stage; solveWriteHash(); return solveStage(); }
+    const toFetch = [ARCHIVES.get(SVIEW.key), ARCHIVES.get('ZOOMBINI')].filter(x => x && !x.bytes);
+    Promise.all(toFetch.map(ensureBytes)).then(() => { SSPRITES.clear(); if (isSolveHash()) solveStage(); });
+    solveStage();
+  });
+  panel.addEventListener('change', e => {
+    const t = e.target, v = SVIEW;
+    if (t.id === 'spuzzle') { v.key = t.value; v.set = null; if (v.level === 5) v.seed = 0; return solveRedo(); }
+    if (t.id === 'slevel') {
+      if (+t.value === 5 && SDEALT) { v.band = SDEALT.band; v.seed = 0; }
+      else if (v.level === 5) v.seed = 1 + Math.floor(Math.random() * 0x7fffffff);
+      v.level = +t.value; v.set = null; return solveRedo();
+    }
+    if (t.id === 'sout' && t.value !== '') { v.path.push(+t.value); return solveRedraw(); }
+    if (t.id === 'sknows') { v.knows = t.value; v.path = []; SSTRAT = null; SNODES = []; return solveRedraw(); }
+    if (t.dataset.trait) {
+      const band = (v.band || SDEALT.band).map(z => Object.assign({}, z));
+      band[+t.dataset.i][t.dataset.trait] = +t.value;
+      v.band = band;
+      if (v.level === 5) v.seed = 0;
+      return solveRedo();
+    }
+    if (t.dataset.field) {
+      const P = SPUZZLE, arc = P.archive ? solveOpen(P.archive) : undefined;
+      const fields = P.form(solveRules(), SDEALT.band, SDEALT.edited || SDEALT.state, arc);
+      const values = Object.fromEntries(fields.filter(f => f.kind !== 'note').map(f => [f.key, Array.isArray(f.value) ? f.value.slice() : f.value]));
+      const f = fields.find(x => x.key === t.dataset.field);
+      const typed = s => { const o = f.options.find(o => String(o.value) === s); return o ? o.value : s; };
+      if (f.kind === 'choice') values[f.key] = typed(t.value);
+      else if (f.kind === 'several') values[f.key] = [...panel.querySelectorAll(`input[data-field="${f.key}"]:checked`)].map(x => typed(x.value));
+      else if (f.kind === 'order') values[f.key][+t.dataset.at] = typed(t.value);
+      v.set = values;
+      return solveRedo();
+    }
+  });
+  panel.addEventListener('click', e => {
+    const a = e.target.closest('[data-sact],[data-drop],[data-sview],[data-pick],[data-out],[data-back]');
+    if (!a) return;
+    e.preventDefault();
+    const d = a.dataset, v = SVIEW;
+    if (d.sact === 'hardstop') { if (SHARD) SHARD.stop = true; return; }
+    const band = () => (v.band || SDEALT.band).map(z => Object.assign({}, z));
+    const hard = v.level === 5;
+    if (d.sact === 'add') { const b = band(); b.push(zbDealBand(zbRandom(Date.now() & 0x7fffffff), 1)[0]); v.band = b; if (hard) v.seed = 0; return solveRedo(); }
+    if (d.sact === 'dice') {
+      const n = (v.band || SDEALT.band).length;
+      if (hard) { v.band = zbDealBand(zbRandom(1 + Math.floor(Math.random() * 0x7fffffff)), n); v.seed = 0; }
+      else { v.band = null; v.size = n; v.seed = 1 + Math.floor(Math.random() * 0x7fffffff); }
+      v.set = null; return solveRedo();
+    }
+    if (d.sact === 'dealband') { v.size = v.band.length; v.band = null; return solveRedo(); }
+    if (d.sact === 'redeal') { if (!v.band) v.band = SDEALT.band; v.seed = hard ? 0 : 1 + Math.floor(Math.random() * 0x7fffffff); v.set = null; return solveRedo(); }
+    if (d.sact === 'unset') { v.set = null; return solveRedo(); }
+    if (d.sact === 'sprites') { ensureBytes(ARCHIVES.get('ZOOMBINI')).then(() => { SSPRITES.clear(); solveDraw(); }); return solveDraw(); }
+    if (d.drop) { const b = band(); b.splice(+d.drop, 1); v.band = b; if (hard) v.seed = 0; return solveRedo(); }
+    if (d.sview) { v.view = d.sview; return solveRedraw(); }
+    if (d.pick) { v.pick = +d.pick; return solveRedraw(); }
+    if (d.out) { v.path.push(+d.out); return solveRedraw(); }
+    if (d.back) { v.path = v.path.slice(0, +d.back); SNODES = SNODES.slice(0, +d.back + 1); return solveRedraw(); }
+  });
+}
+
+wireSolve();

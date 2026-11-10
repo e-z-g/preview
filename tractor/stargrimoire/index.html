@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>StarGrimoire</title>
+<style>
+:root {
+  --bg: #04060a; --panel: #0b0f16; --raise: #121823; --line: #1f2735; --text: #d5dbe5;
+  --dim: #8792a5; --faint: #5a6477; --accent: #86b6ff; --warn: #e8b86a; --bad: #ef8a80;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); }
+body { display: flex; flex-direction: column; overflow: hidden; }
+button, input, select { font: inherit; color: inherit; }
+button, .btn {
+  background: var(--raise); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px;
+  cursor: pointer; white-space: nowrap;
+}
+button:hover, .btn:hover { border-color: var(--faint); }
+button:disabled { opacity: .45; cursor: default; }
+input[type=text], input[type=search], select {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0;
+}
+a { color: var(--accent); text-decoration: none; cursor: pointer; }
+a:hover { text-decoration: underline; }
+
+/* ---- the bar ---- */
+#bar {
+  display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--line);
+  background: var(--panel); flex: none; min-height: 46px;
+}
+#brand { font-weight: 650; letter-spacing: .02em; }
+/* the name opens the credits, taking no more of the bar than the name did */
+#creditsBtn { background: none; border: 0; padding: 0; cursor: pointer; }
+#crumbs { display: flex; gap: 6px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; }
+#crumbs .sep { color: var(--faint); }
+#crumbs .here { color: var(--text); }
+#status { margin-left: auto; color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#status.bad { color: var(--bad); }
+/* the file buttons sit in the bar, and on a phone under the More button */
+#fileMenu { display: contents; }
+#moreBtn, #creditsItem, .grip { display: none; }
+
+/* ---- credits, a panel under the bar, as grimoire's ---- */
+#creditsMenu { position: absolute; top: 46px; right: 8px; z-index: 50; width: min(560px, calc(100vw - 16px)); max-height: calc(100vh - 60px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; box-shadow: 0 6px 24px rgba(0,0,0,.5); font-size: 13px; }
+#creditsMenu h4 { margin: 12px 0 4px; font-size: 13px; font-weight: 600; color: var(--dim); }
+#creditsMenu ul { margin: 0; padding-left: 18px; }
+#creditsMenu li { margin: 3px 0; }
+#creditsMenu p { margin: 8px 0 0; }
+#creditsMenu .cNote { color: var(--dim); }
+
+/* ---- before anything is open ---- */
+#start { flex: 1; display: grid; place-items: center; padding: 24px 16px; overflow: auto; }
+#start .card { max-width: 560px; width: 100%; }
+#start h1 { font-size: 22px; font-weight: 650; margin: 0 0 6px; }
+#start p { color: var(--dim); margin: 8px 0; }
+#drop {
+  margin: 18px 0; border: 1.5px dashed var(--line); border-radius: 10px; padding: 26px 18px; text-align: center;
+  background: var(--panel);
+}
+#drop.over { border-color: var(--accent); }
+#drop .btn { display: inline-block; margin-top: 6px; }
+#start ul { color: var(--dim); padding-left: 20px; margin: 6px 0; }
+#start li { margin: 3px 0; }
+code { font: 12.5px/1.3 ui-monospace, Menlo, monospace; color: var(--text); }
+
+/* ---- the map ---- */
+#app { flex: 1; display: flex; min-height: 0; }
+#stage { position: relative; flex: 1; min-width: 0; overflow: hidden; background: #000; }
+#map { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+#map.dragging { cursor: grabbing; }
+/* The tools and the corner sit on solid panels, so that no name drawn on the
+   map shows through them or between them. */
+#tools, #corner {
+  position: absolute; top: 10px; z-index: 2; display: flex; gap: 6px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .6);
+}
+#tools { left: 10px; flex-wrap: wrap; max-width: calc(100% - 116px); }
+#corner { right: 10px; }
+#corner button { padding: 5px 7px; line-height: 0; }
+#corner svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+#panelBtn .side { fill: currentColor; stroke: none; opacity: .4; }
+#panelBtn[aria-pressed="false"] .side { opacity: 0; }
+#fullBtn .leave, #fullBtn.on .enter { display: none; }
+#fullBtn.on .leave { display: inline; }
+#app.bare #panel { display: none; }
+#search { width: 190px; }
+#found {
+  position: absolute; left: 10px; top: 52px; z-index: 3; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; min-width: 220px; max-height: 50%; overflow: auto; display: none;
+}
+#found div { padding: 5px 10px; cursor: pointer; }
+#found div:hover, #found div.on { background: var(--raise); }
+#found small { color: var(--dim); margin-left: 6px; }
+#bitsIn { width: 150px; }
+#scale { position: absolute; right: 10px; bottom: 8px; color: var(--faint); font-size: 12px; z-index: 2; pointer-events: none; }
+#legend { position: absolute; left: 10px; bottom: 8px; z-index: 2; pointer-events: none; font-size: 12px; color: var(--dim);
+  background: rgba(11, 15, 22, .88); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; max-width: 60%; }
+#busy, #mapNote { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 2; pointer-events: none; font-size: 12px;
+  color: var(--text); background: rgba(11, 15, 22, .88); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; }
+#legend .ramp { height: 8px; width: 160px; border-radius: 2px; margin: 5px 0 2px; }
+#legend .gap { height: 8px; }
+#legend .ends { display: flex; justify-content: space-between; width: 160px; }
+#opts { position: absolute; left: 10px; z-index: 3; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; max-width: calc(100% - 20px); max-height: calc(100% - 64px); overflow: auto; }
+#opts label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+#opts label.under { margin-left: 22px; }
+#opts label.under2 { margin-left: 44px; }
+#opts label.under3 { margin-left: 66px; }
+#opts label[hidden] { display: none; }
+#opts label:has(input:disabled) { opacity: .45; cursor: default; }
+#opts input[type=checkbox] { margin: 0; }
+#opts input[type=number] { width: 4.2em; }
+#panel .route { margin: 8px 0; padding: 7px 9px; border-left: 3px solid #ffcf4a; background: rgba(255,207,74,0.07); line-height: 1.6; }
+#panel .route button { margin-left: 4px; }
+
+/* ---- the planet ---- */
+#stage.landed #tools, #stage.landed #corner, #stage.landed #scale, #stage.landed #found, #stage.landed #legend, #stage.landed #opts, #stage.landed #busy, #stage.landed #mapNote { display: none; }
+#planet { position: absolute; inset: 0; overflow: auto; background: #000; display: none; }
+#planet.on { display: block; }
+#planet { touch-action: pan-y; }
+#planet .land { max-width: 900px; margin: 0 auto; padding: 14px; transform-origin: 50% 30%; }
+#planet .pict { width: 100%; display: block; image-rendering: auto; border-radius: 4px; background: #080a0f; }
+#planet .pict.pixel { image-rendering: pixelated; }
+#planet .nopict { color: var(--dim); padding: 40px 0; text-align: center; }
+#planet .desc { margin: 14px 2px; white-space: pre-wrap; }
+#planet .desc.dim { color: var(--dim); }
+#planet h3 { font-size: 13px; font-weight: 600; color: var(--dim); margin: 18px 2px 4px; text-transform: none; }
+#planet .spritebox { display: flex; justify-content: center; padding: 30px 0; }
+/* The black screen at the end of a fall onto a stellar, and at the start of a rise from one. */
+#fade { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 5; }
+
+/* ---- the panel ---- */
+#panel {
+  width: 370px; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto;
+  padding: 14px 16px 30px;
+}
+#panel h2 { font-size: 18px; margin: 0 0 2px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+#panel .sub { color: var(--dim); margin-bottom: 10px; }
+#panel h3 { font-size: 12.5px; font-weight: 600; color: var(--dim); margin: 16px 0 5px; }
+#panel .desc { white-space: pre-wrap; margin: 10px 0; }
+#panel .storyChart { overflow-x: auto; margin: 6px 0 12px; }
+#panel .storyChart path { fill: none; stroke: var(--dim); stroke-width: 1.3; }
+#panel .storyChart path.back { stroke-dasharray: 4 3; }
+#panel .storyChart rect { fill: var(--raise); stroke-width: 1.5; }
+#panel .storyChart rect.yes { stroke: #9fe870; } #panel .storyChart rect.no { stroke: #e87070; }
+#panel .storyChart text { fill: var(--text); font-size: 11.5px; } #panel .storyChart text.step { fill: var(--dim); font-size: 10.5px; }
+#panel .storyChart a { cursor: pointer; }
+#storyMap { position: fixed; inset: 0; z-index: 60; background: var(--bg); display: flex; flex-direction: column; }
+#storyMap .smTop { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 16px 0; }
+#storyMap .smTop button { margin-left: auto; }
+#storyMap .smNote { padding: 0 16px; margin: 6px 0; }
+#storyMap .smScroll { flex: 1; overflow: auto; padding: 0 6px 16px; }
+#storyMap path { fill: none; stroke: var(--dim); stroke-width: 1.3; } #storyMap path.back { stroke-dasharray: 4 3; }
+#storyMap path.shut { stroke: #e87070; stroke-width: 1.6; } #storyMap path.shutter { stroke: #ffb347; stroke-width: 1.6; }
+#storyMap rect { fill: var(--raise); stroke-width: 1.5; } #storyMap rect.yes { stroke: #9fe870; } #storyMap rect.no { stroke: #e87070; }
+#storyMap rect.shut { fill: rgba(232,112,112,0.25); } #storyMap rect.shutter { fill: rgba(255,179,71,0.25); } #storyMap rect.both { fill: rgba(190,120,230,0.32); } #storyMap rect.picked { stroke: var(--text); stroke-width: 3; }
+#storyMap text { fill: var(--text); font-size: 12px; } #storyMap text.step { fill: var(--dim); font-size: 11px; } #storyMap a { cursor: pointer; }
+#panel details.ovStory > summary { cursor: pointer; padding: 3px 0; }
+#panel details.ovStory details { margin-left: 12px; }
+#panel figure.recPict { margin: 8px 0; }
+#panel figure.recPict .pict { max-width: 100%; display: block; border-radius: 4px; background: #080a0f; }
+#panel figure.recPict .nopict { color: var(--dim); padding: 20px 0; }
+#panel figure.recPict figcaption { font-size: 11.5px; color: var(--dim); margin-top: 3px; }
+#panel p { margin: 6px 0; }
+#panel .actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 4px; }
+.chip { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 1px solid rgba(255,255,255,.5); flex: none; vertical-align: -1px; }
+table.kv { border-collapse: collapse; width: 100%; }
+table.kv td { padding: 2px 0; vertical-align: top; }
+table.kv td:first-child { color: var(--dim); padding-right: 12px; white-space: nowrap; width: 1%; }
+table.fields { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+table.fields td { padding: 1px 0; vertical-align: top; border-bottom: 1px solid #141a25; }
+table.fields td:first-child { color: var(--dim); padding-right: 10px; white-space: nowrap; }
+table.fields td:last-child { word-break: break-word; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+details { margin-top: 14px; }
+details summary { cursor: pointer; color: var(--dim); }
+.editBar { margin: 6px 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.editBar .warn { color: var(--warn); font-size: 12.5px; }
+table.fields .fieldNote { font-family: var(--font); font-size: 11.5px; color: var(--dim); margin: 1px 0 3px; word-break: normal; }
+table.fields .fieldRead { color: inherit; }
+/* a note's few words, or the whole note when Notes in full is ticked */
+html:not(.notesFull) table.fields .fieldFull, html.notesFull table.fields .fieldShort { display: none; }
+table.fields .fieldCode { display: block; }
+.editBar .notesFull { margin-left: auto; font-size: 12.5px; color: var(--dim); }
+table.fields.editing input { width: 100%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+#choose input#pluginName { margin-left: 8px; flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
+#choose table.plugin { margin: 8px 0; }
+.list a, .list span { display: inline; }
+.list { display: flex; flex-wrap: wrap; gap: 3px 12px; }
+.test { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+.yes { color: #9fd89f; } .no { color: var(--dim); }
+.legend div { display: flex; align-items: center; gap: 7px; padding: 1px 0; cursor: pointer; }
+.legend div.on { color: var(--accent); }
+.legend small { color: var(--faint); margin-left: auto; }
+.note { color: var(--dim); font-size: 12.5px; }
+.warn { color: var(--warn); }
+
+/* ---- the view switch ---- */
+#views { display: flex; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 2px; flex: none; }
+#views a { padding: 3px 10px; border-radius: 5px; color: var(--dim); text-decoration: none; }
+#views a.on { background: var(--raise); color: var(--text); }
+
+/* ---- the battle ---- */
+#battle { flex: 1; display: flex; min-height: 0; }
+#battleSide { width: 320px; flex: none; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+#battleTop { padding: 10px 14px 4px; flex: none; }
+#battleHangar { flex: 1; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--line); }
+#battleHangar .listTools { display: flex; gap: 8px; padding: 8px 10px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+#battleSearch { flex: 1; min-width: 110px; }
+#battleRows { overflow: auto; flex: 1; touch-action: pan-y; }
+.battleShip { cursor: grab; user-select: none; -webkit-user-select: none; }
+.battleShip .id { color: var(--faint); font-size: 12px; }
+.battleGhost { position: fixed; pointer-events: none; z-index: 50; opacity: 0.85; }
+#battleStage { flex: 1; position: relative; min-width: 0; min-height: 0; }
+#battleCanvas { position: absolute; inset: 0; touch-action: none; cursor: grab; display: block; }
+.battle-side { margin: 10px 0; padding-left: 9px; border-left: 3px solid var(--side); }
+.battle-side ul { margin: 4px 0; padding-left: 16px; }
+.battle-side a[data-battle-do] { cursor: pointer; }
+.battle-left { color: var(--dim); font-size: 12.5px; }
+.battle-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
+.battle-row select { max-width: 100%; min-width: 0; flex: 1 1 auto; }
+
+/* ---- the ships ---- */
+#ships { flex: 1; display: flex; min-height: 0; }
+#code { flex: 1; display: flex; min-height: 0; }
+#library { flex: 1; min-height: 0; overflow: auto; padding: 12px 18px 40px; }
+#library .libTop { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; position: sticky; top: -12px; background: var(--bg); padding: 6px 0; z-index: 1; }
+#library .libTop button.on { background: var(--raise); color: var(--text); }
+#library .libTop input { flex: 1; min-width: 120px; }
+#library .libScroll { overflow-x: auto; }
+#library table.libTable { border-collapse: collapse; font-size: 12.5px; }
+#library table.libTable th { text-align: left; padding: 4px 8px; color: var(--dim); cursor: pointer; white-space: nowrap; border-bottom: 1px solid var(--line); }
+#library table.libTable th.up::after { content: ' ▲'; } #library table.libTable th.down::after { content: ' ▼'; }
+#library table.libTable td { padding: 3px 8px; white-space: nowrap; border-bottom: 1px solid rgba(255,255,255,0.04); }
+#library table.libTable td:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }
+#library details.libItem { border-bottom: 1px solid var(--line); padding: 4px 0; }
+#library details.libItem summary { cursor: pointer; }
+#library details.libItem summary small { display: block; color: var(--dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#library .desc { white-space: pre-wrap; margin: 6px 0 10px; max-width: 760px; }
+#library .libPicts { display: flex; flex-wrap: wrap; gap: 12px; }
+#library .libPicts figure { margin: 0; width: 180px; }
+#library .libPicts canvas { max-width: 180px; max-height: 180px; display: block; background: #080a0f; border-radius: 4px; }
+#library .libPicts .nopict { width: 180px; height: 100px; display: flex; align-items: center; justify-content: center; color: var(--dim); background: #080a0f; border-radius: 4px; font-size: 12px; }
+#library .libPicts figcaption { font-size: 11.5px; color: var(--dim); margin-top: 3px; }
+#codeList { width: 300px; flex: none; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+#codeList .listTools { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
+#codeList .listTools input { flex: 1; min-width: 0; }
+#codeCount { color: var(--dim); font-size: 12px; }
+#codeRows { overflow: auto; flex: 1; padding: 4px 0; }
+#codeRows a { display: block; padding: 5px 12px; color: var(--text); text-decoration: none; cursor: pointer; }
+#codeRows a small { display: block; color: var(--dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#codeRows a.on { background: var(--sel, rgba(255,255,255,0.08)); }
+#codeView { flex: 1; min-width: 0; overflow: auto; padding: 16px 20px 40px; }
+#codeView table.code { border-collapse: collapse; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 10px; }
+#codeView table.code td { padding: 0 14px 0 4px; white-space: pre; vertical-align: top; }
+#codeView table.code td:first-child { color: var(--dim); }
+#codeView table.code tr.at td { background: rgba(255, 207, 74, 0.18); outline: 1px solid #ffcf4a; }
+a.codeNum { text-decoration: underline dotted; text-underline-offset: 2px; }
+#codeView .codeRead { color: #ffcf4a; margin-left: 8px; white-space: normal; }
+#codeView table.code td.gloss { color: var(--dim); font-family: system-ui, sans-serif; }
+#codeView table.code mark, #codeView .codeWhy mark { background: #ffcf4a; color: #000; border-radius: 2px; padding: 0 1px; }
+#codeView .codeWhy { position: sticky; top: -16px; z-index: 1; margin: 12px 0 4px; padding: 8px 12px; border-left: 3px solid #ffcf4a; background: linear-gradient(rgba(255, 207, 74, 0.08), rgba(255, 207, 74, 0.08)), var(--bg); max-width: 60em; }
+#codeView .codeWhy p { margin: 4px 0; }
+#shipList { width: 300px; flex: none; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+#shipList .listTools { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
+#shipSearch { flex: 1; min-width: 120px; }
+#shipCount { color: var(--faint); font-size: 12px; width: 100%; }
+#shipRows { overflow: auto; flex: 1; }
+.shipRow { display: flex; align-items: center; gap: 10px; padding: 4px 10px; color: var(--text); border-bottom: 1px solid #111722; }
+.shipRow:hover { background: var(--raise); text-decoration: none; }
+.shipRow.on { background: #16233a; }
+.shipRow .thumb { width: 44px; height: 44px; flex: none; background: #000; border-radius: 4px; }
+.shipRow .nm { flex: 1; min-width: 0; overflow: hidden; }
+.shipRow .nm small { display: block; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shipRow .id { color: var(--faint); font-size: 12px; }
+.shipRow.sub { padding-left: 64px; }
+.shipRow.look { cursor: pointer; }
+.shipRow .count { color: var(--dim); font-size: 14px; width: 1.2em; text-align: center; }
+#shipView { flex: 1; min-width: 0; overflow: auto; padding: 16px 20px 40px; }
+#shipView h2 { font-size: 20px; margin: 0 0 2px; font-weight: 650; }
+#shipView h3 { font-size: 12.5px; font-weight: 600; color: var(--dim); margin: 18px 0 5px; }
+#shipView .sub { color: var(--dim); margin-bottom: 12px; }
+#shipView .desc { white-space: pre-wrap; margin: 14px 0; max-width: 760px; }
+.shipRow .nm small i { color: var(--faint); font-style: normal; }
+.shipHead .note { margin: -6px 0 12px; }
+.shipNone { color: var(--dim); padding: 40px 0; text-align: center; }
+.shipTop { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+.shipStage { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+#shipCanvas { background: #000; border-radius: 6px; touch-action: pan-y; cursor: ew-resize; display: block; max-width: 100%; height: auto; aspect-ratio: 1; }
+.shipCtl { display: flex; gap: 5px; flex-wrap: wrap; justify-content: center; max-width: 320px; }
+.shipCtl button { padding: 3px 9px; font-size: 13px; }
+.shipCtl button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.shipPics { display: flex; gap: 14px; flex-wrap: wrap; flex: 1 1 280px; min-width: 0; }
+.shipPics figure { margin: 0; max-width: 100%; }
+.shipPics figcaption { color: var(--faint); font-size: 12px; margin-top: 4px; }
+.shipPics canvas { max-width: 100%; height: auto; display: block; border-radius: 4px; }
+.shipPics .nopict { color: var(--dim); padding: 20px; }
+.shipCols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 28px; max-width: 900px; }
+details.inline { display: inline; margin: 0; }
+details.inline .list { margin-top: 4px; }
+#shipView details { max-width: 900px; }
+
+/* ---- choosing plug-ins out of an archive ---- */
+#choose { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 10; padding: 16px; }
+#choose .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; max-width: 560px; width: 100%; max-height: 85vh; overflow: auto; }
+#choose h2 { font-size: 16px; margin: 0 0 6px; }
+#choose label { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; cursor: pointer; }
+#choose small { color: var(--dim); }
+#choose .actions button small { color: var(--dim); }
+/* the plug-ins on archive.org: the list scrolls between the sets and the buttons */
+#choose .box.coll { display: flex; flex-direction: column; height: 85vh; }
+#choose .coll .collSets { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+#choose .coll .collSets button.on { border-color: var(--accent); color: var(--accent); }
+#choose .coll #collSearch { margin: 6px 0; }
+#choose .coll #collRows { flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--line); }
+#choose .coll .collRow { border-bottom: 1px solid var(--line); padding: 2px 0; }
+#choose .coll .collRow label { padding: 4px 0 2px; overflow-wrap: anywhere; }
+#choose .coll .collRow details { margin: 0 0 4px 26px; }
+#choose .coll .collPackage .collRow:last-child { border-bottom: 0; }
+#choose .coll .collRow .desc { white-space: pre-wrap; margin: 4px 0; overflow-wrap: anywhere; }
+#choose .coll .actions { align-items: baseline; }
+#choose .coll #collTicked { margin-right: auto; }
+.compare th { text-align: left; font-weight: 600; color: var(--dim); }
+.compare td { overflow-wrap: anywhere; }
+.compareList > details, .compareList > div { margin: 2px 0 2px 10px; }
+#choose .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+
+@media (max-width: 820px) {
+  #app { flex-direction: column; }
+  /* the grip between the map and the panel, or the battle and its side, moves the line between them */
+  .grip { display: block; flex: none; height: 18px; position: relative; touch-action: none; cursor: row-resize;
+    background: var(--panel); border-top: 1px solid var(--line); }
+  .grip::after { content: ''; position: absolute; left: 50%; top: 7px; width: 44px; height: 4px; margin-left: -22px; border-radius: 2px; background: var(--faint); }
+  #stage { flex: 0 0 var(--split, 55%); }
+  #app.bare #stage { flex: 1 1 0; }
+  #app.bare .grip { display: none; }
+  #panel { width: auto; flex: 1 1 0; border-left: 0; padding: 2px 12px 30px; }
+  #search { width: auto; flex: 1 1 100px; }
+  /* pinching zooms, and the choice of which systems are shown goes under Map options */
+  #zoomIn, #zoomOut { display: none; }
+  #tools, #corner { top: 6px; padding: 4px; }
+  #tools { left: 6px; flex-wrap: nowrap; max-width: calc(100% - 104px); }
+  #corner { right: 6px; }
+  #moreBtn { display: inline-block; padding: 4px 10px; }
+  #creditsItem { display: block; }
+  #fileMenu { display: none; position: fixed; right: 8px; z-index: 50; flex-direction: column; align-items: stretch; gap: 6px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+  #fileMenu > .btn, #fileMenu > button { text-align: left; }
+  #bar.more #fileMenu { display: flex; }
+  #views a { padding: 3px 8px; }
+  #library { padding: 8px 10px 40px; }
+  #library .libTop { top: -8px; }
+  #bitsIn { width: 110px; }
+  #panelBtn svg { transform: rotate(90deg); }
+  #brand { display: none; }
+  /* the views and four buttons are wider than a phone: the buttons go under More, and the bar stays one row high */
+  #bar { flex-wrap: wrap; gap: 6px 8px; padding: 6px 10px; }
+  #fileMenu > button, #fileMenu > .btn { padding: 6px 12px; }
+  /* the crumbs and the status shrink rather than wrap, so whatever they show fits in the first row */
+  #crumbs { flex: 1 1 0; }
+  /* while something is read, its name and progress go on a separate row, under the views */
+  #status { order: 10; flex: 1 0 100%; max-width: none; margin-left: 0; }
+  /* once reading is done the status is only the count of files open, so the buttons have the bar's room */
+  #status.idle { display: none; }
+  #ships { flex-direction: column; }
+  #code { flex-direction: column; }
+  #codeList { width: auto; flex: 1; border-right: 0; }
+  #code.picked #codeList { display: none; }
+  #code:not(.picked) #codeView { display: none; }
+  #codeView { padding: 12px 14px 40px; }
+  #battle { flex-direction: column-reverse; }
+  #battleSide { width: auto; flex: 1 1 0; border-right: 0; overflow: auto; display: block; }
+  #battleHangar { display: block; }
+  #battleRows { overflow: visible; }
+  #battleStage { flex: 0 0 var(--split, 50%); }
+  #shipList { width: auto; flex: 1; border-right: 0; }
+  #ships.picked #shipList { display: none; }
+  #ships:not(.picked) #shipView { display: none; }
+  #shipView { padding: 12px 14px 40px; }
+}
+</style>
+</head>
+<body>
+<header id="bar">
+  <button id="creditsBtn" aria-expanded="false" aria-controls="creditsMenu" title="Credits"><span id="brand">StarGrimoire</span></button>
+  <nav id="views" hidden><a data-view="map" class="on" href="#galaxy">Map</a><a data-view="ships" href="#ships">Ships</a><a data-view="battle" href="#battle">Battle</a><a data-view="code" href="#code">Code</a><a data-view="library" href="#library=table">Library</a></nav>
+  <nav id="crumbs"></nav>
+  <span id="status"></span>
+  <button id="moreBtn" aria-expanded="false" aria-controls="fileMenu" aria-label="More" title="More">⋯</button>
+  <span id="fileMenu">
+  <label class="btn" id="openBtn">Open…<input type="file" id="picker" multiple hidden></label>
+  <button id="compareBtn" title="Compare the open game with another release" hidden>Compare…</button>
+  <button id="collectionBtn" title="The community's plug-ins on archive.org, opened into the game from there" hidden>Add plug-ins…</button>
+  <button id="pluginBtn" title="The records changed here, saved as a plug-in" hidden>Plug-in…</button>
+  <button id="forgetBtn" title="Delete the copy saved in this browser, so the next visit starts empty" hidden>Forget</button>
+  <button id="creditsItem">Credits</button>
+  </span>
+</header>
+<!-- Credits, as grimoire's: the game's crew as listed in the game's
+     documentation (EV Nova Documentation.pdf, page 3, "The crew behind the scenes"),
+     then what this page is built from (doc/credits.md). -->
+<div id="creditsMenu" role="dialog" aria-label="Credits" hidden>
+  <p>StarGrimoire is maintained by <strong>EgadZoundsGadzooks</strong>, and reads everything it shows from EV Nova's data files.</p>
+  <h4>The game</h4>
+  <p class="cNote">In the game's documentation they are "the crew behind the scenes":</p>
+  <ul>
+    <li>Engine Programming: <strong>Matt Burch</strong></li>
+    <li>Concepts, Plot, Dialogue, Scenario Implementation, Graphics, Sound Production, Boolean Illogic, and anything else that may have been forgotten: <strong>ATMOS Software Productions</strong>, who are Luke “Nuada” Smart, Stephen “-8-” Chick, Phillip “particlestan” Chick, Jason “Frandall” Cook, Scott “Eyeya” Vardy, Jarrod “wooly_mammoth” Rainsford, Paul “Dalsoth” Pentecost and Dafydd “pipeline” Williams</li>
+    <li>Tools Programming: <strong>Ralph “Dr. Ralph” Sutherland</strong></li>
+    <li>Published by <strong>Ambrosia Software, Inc.</strong>: Andrew Welch, Ed Ota, David Dunham, Bernard Cockhern, John Champlin, Matt Slot, Jen Tontarski</li>
+    <li>Documentation: <strong>David Dunham</strong></li>
+  </ul>
+  <h4>What the page is built from</h4>
+  <ul>
+    <li>The <strong>EV Nova Resource Bible</strong>, by <strong>Matt Burch</strong>, as reformatted by <strong>ReinierK</strong>, and Ambrosia's ResEdit templates: the records' fields, units and flags.</li>
+    <li><strong>Grimoire</strong>: the readers for Mac archives, resource forks and pictures, whose StuffIt reader comes from <strong>Ben Letchford</strong>'s stuffit-rs, after <strong>Dag Ågren</strong>'s The Unarchiver.</li>
+    <li><strong>evnova-decomp</strong>, by <strong>Lancelot de Ferrière</strong>: the Community Edition's function names, which helped read its program alongside the Mac one.</li>
+    <li><strong>ResForge</strong>, by <strong>Andrew Simmonds</strong>: how a ship's sprite layers are blended.</li>
+    <li>The subway map, after <strong>Gansner, Koren and North</strong>; <strong>Stott, Rodgers, Martinez-Ovando and Walker</strong>; and <strong>Bast, Brosi and Storandt</strong>. Its names, after <strong>Been, Daiches and Yap</strong>; <strong>Been, Nöllenburg, Poon and Wolff</strong>; and <strong>Christensen, Marks and Shieber</strong>. Its colours for jumps, <strong>Anton Mikhailov</strong>'s turbo.</li>
+  </ul>
+  <p>Everyone named here is credited for work StarGrimoire draws on. None of them was involved in making it or has endorsed it, and its mistakes are its maintainer's.</p>
+  <p>StarGrimoire was written with the assistance of Claude.</p>
+  <p class="cNote">EV Nova is ©2002 by Ambrosia Software, Inc. This is an unofficial fan-made tool, and publishes none of the game's files.</p>
+</div>
+
+<main id="start">
+  <div class="card">
+    <h1>EV Nova's universe, read from the game's files</h1>
+    <p>Open a copy of <i>Escape Velocity Nova</i> for the Mac. Nothing leaves this page: the files are read here, in the browser.</p>
+    <div id="drop">
+      Drop the files here, or
+      <label class="btn">choose them…<input type="file" id="picker2" multiple hidden></label>
+    </div>
+    <p>What it reads:</p>
+    <ul>
+      <li>a release as Ambrosia shipped it: <code>EV_Nova_1.0.10.sit</code>, <code>1.0.8</code> or <code>1.0.2</code>;</li>
+      <li>1.1.1's disk image, <code>EV_Nova_1.1.1_for_Mac_OS_X.dmg</code>, or the <code>.ndat</code> files from its <code>Nova Files</code> folder, all selected at once;</li>
+      <li>the community's builds and their <code>.rez</code> files, or the zip they come in;</li>
+      <li>a MacBinary or BinHex copy of each data file;</li>
+      <li>plug-ins, as <code>.rez</code>, <code>.sit</code> or <code>.zip</code>, opened with a game or after it.</li>
+    </ul>
+    <p>A file picked straight out of a classic Mac folder comes without its resource fork, and that is where all of the game's data is, so it cannot be read that way.</p>
+    <p>With no copy to hand, read the one on archive.org: 1.0.10 as Ambrosia shipped it, 96 MB, fetched when you ask.</p>
+    <button id="useRemote">Read archive.org's copy</button>
+  </div>
+</main>
+
+<div id="choose" hidden><div class="box"></div></div>
+
+<main id="battle" hidden>
+  <aside id="battleSide">
+    <div id="battleTop"></div>
+    <div id="battleHangar">
+      <div class="listTools">
+        <input type="search" id="battleSearch" placeholder="Find a ship" autocomplete="off">
+        <label class="note">Drop <select data-battle="many" aria-label="How many to drop at a time"><option>1</option><option>2</option><option>3</option><option>5</option><option>8</option></select></label>
+        <label class="note">Flies as <select data-battle="ai" aria-label="The AI type ships dropped fly as"><option value="0">its class's</option><option value="1">Wimpy trader</option><option value="2">Brave trader</option><option value="3" selected>Warship</option><option value="4">Interceptor</option></select></label>
+        <span id="battleCount" class="note"></span>
+      </div>
+      <div id="battleRows"></div>
+    </div>
+  </aside>
+  <div class="grip" id="battleGrip" aria-hidden="true"></div>
+  <div id="battleStage"><canvas id="battleCanvas"></canvas></div>
+</main>
+
+<main id="library" hidden></main>
+<div id="storyMap" hidden></div>
+<main id="code" hidden>
+  <nav id="codeList">
+    <div class="listTools">
+      <input type="search" id="codeSearch" placeholder="Find in the program" autocomplete="off">
+      <span id="codeCount"></span>
+    </div>
+    <div id="codeRows"></div>
+  </nav>
+  <section id="codeView"></section>
+</main>
+<main id="ships" hidden>
+  <nav id="shipList">
+    <div class="listTools">
+      <input type="search" id="shipSearch" placeholder="Find a ship" autocomplete="off">
+      <select id="shipSort" title="The order of the list">
+        <option value="yard">Shipyard order</option>
+        <option value="id">By number</option>
+      </select>
+      <span id="shipCount"></span>
+    </div>
+    <div id="shipRows"></div>
+  </nav>
+  <section id="shipView"></section>
+</main>
+
+<main id="app" hidden>
+  <div id="stage">
+    <canvas id="map"></canvas>
+    <div id="tools">
+      <input type="search" id="search" placeholder="Find anything" autocomplete="off">
+      <button id="zoomOut" title="Zoom out">−</button>
+      <button id="zoomIn" title="Zoom in">+</button>
+      <button id="fit" title="Show all">Fit</button>
+      <select id="showSel" title="Which systems are on the map">
+        <option value="new">As at a new game</option>
+        <option value="bits">With these bits set</option>
+        <option value="all">Every version</option>
+      </select>
+      <input type="text" id="bitsIn" placeholder="b147 b305" hidden>
+      <button id="optsBtn" aria-expanded="false" title="What the map shows">Map options</button>
+    </div>
+    <div id="opts" hidden>
+      <label><input type="checkbox" id="optSubway"> Subway map</label>
+      <label class="under"><input type="checkbox" id="optArrange" checked> Systems arranged as on a subway map</label>
+      <label class="under2"><input type="checkbox" id="optFine" checked> 22.5° angles</label>
+      <label class="under3"><input type="checkbox" id="optMixed" checked> only where 45° is awkward</label>
+      <label class="under2"><input type="checkbox" id="optRoom" checked> Room for names</label>
+      <label class="under2"><input type="checkbox" id="optHeading" checked> Lines within 45° of their true direction</label>
+      <label class="under3"><input type="checkbox" id="optBars" checked> Busy stations as bars</label>
+      <label class="under3"><input type="checkbox" id="optSide" checked> Names never across a line from their system (with room for names)</label>
+      <label class="under"><input type="checkbox" id="optPlainNames" checked> Names in metro style: one size, bolder, outlined</label>
+      <label class="under"><input type="checkbox" id="optMetroSys" checked> Systems as metro stations</label>
+      <label class="under"><input type="checkbox" id="optFlatLinks" checked> Links each in one colour, not shading from one government's to another's</label>
+      <label class="under"><input type="checkbox" id="optPlainNeb" checked> Nebulae as plain shapes</label>
+      <label><input type="checkbox" id="optStellars" checked> Stellars as you zoom in</label>
+      <label class="under"><input type="checkbox" id="optShips" checked> Ships in the system you are in</label>
+      <label><input type="checkbox" id="optNames" checked> Names</label>
+      <label><input type="checkbox" id="optSystems" checked> Systems</label>
+      <label class="under">Coloured <select id="dotSel" title="How the systems' dots are coloured">
+        <option value="govt">by government</option>
+        <option value="one">in one colour</option>
+        <option value="interference">by radar interference</option>
+        <option value="asteroids">by asteroids</option>
+        <option value="traffic">by traffic</option>
+      </select></label>
+      <label><input type="checkbox" id="optNebulae" checked> Nebulae</label>
+      <label><input type="checkbox" id="optGates"> Hypergates and wormholes</label>
+      <label>Light up <select id="litSel" title="Which systems are lit; the rest are faint">
+        <option value="all">every system</option>
+        <option value="inhabited">inhabited systems</option>
+        <option value="uninhabited">uninhabited systems</option>
+        <option value="land">systems you can land in</option>
+        <option value="shipyard">systems with a shipyard</option>
+        <option value="outfit">systems with an outfitter</option>
+        <option value="commodity">systems with a commodity exchange</option>
+        <option value="bar">systems with a bar</option>
+        <option value="asteroids">systems with asteroids</option>
+        <option value="interference">systems with radar interference</option>
+      </select></label>
+      <label>Only within <input type="number" id="optReach" min="1" max="99" step="1" placeholder="any" inputmode="numeric" title="Leave empty for everything"> jumps of the selected system</label>
+      <label>Links <select id="linkSel" title="How the links are coloured">
+        <option value="plain">in one colour</option>
+        <option value="govt">in government colours</option>
+        <option value="jumps">by jumps from the selected system</option>
+        <option value="govtOne">each in one government's colour</option>
+      </select></label>
+      <button id="saveImg" type="button">Save the map as a picture</button>
+      <button id="saveWhole" type="button">Save the whole map, large</button>
+      <button id="saveSvg" type="button">Save the whole map as a drawing (SVG)</button>
+    </div>
+    <div id="corner">
+      <button id="panelBtn" aria-pressed="true" aria-label="Details" title="Hide the details"><svg viewBox="0 0 16 16" aria-hidden="true"><rect class="side" x="10" y="2.5" width="4.5" height="11"/><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10 2.5v11"/></svg></button>
+      <button id="fullBtn" aria-label="Full screen" title="Full screen" hidden><svg class="enter" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 5.5v-4h4M10.5 1.5h4v4M14.5 10.5v4h-4M5.5 14.5h-4v-4"/></svg><svg class="leave" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 1.5v4h-4M14.5 5.5h-4v-4M10.5 14.5v-4h4M1.5 10.5h4v4"/></svg></button>
+    </div>
+    <div id="found"></div>
+    <div id="planet"></div>
+    <div id="fade"></div>
+    <div id="scale"></div>
+    <div id="legend" hidden></div>
+    <div id="busy" hidden>Drawing the subway map…</div>
+    <div id="mapNote" hidden></div>
+  </div>
+  <div class="grip" id="appGrip" aria-hidden="true"></div>
+  <aside id="panel"></aside>
+</main>
+
+<script src="js/mac-bytes.js?v=3c702db5"></script>
+<script src="js/mac-containers.js?v=3647455b"></script>
+<script src="js/mac-media.js?v=1a2d6ca6"></script>
+<script src="js/mac-resfork.js?v=8542554e"></script>
+<script src="js/mac-rsrc-types.js?v=4887e33e"></script>
+<script src="js/mac-export.js?v=dddd1944"></script>
+<script src="js/mac-stuffit.js?v=0099116f"></script>
+<script src="js/mac-stuffitx.js?v=f59395e1"></script>
+<!-- the English dictionary of StuffIt X, not run here: page-open.js loads it from this address for an archive that needs it -->
+<script type="text/plain" id="sitxEnglish" src="js/mac-stuffitx-english.js?v=150fde87"></script>
+<script src="js/mac-vise.js?v=dda2d36e"></script>
+<script src="js/mac-zip.js?v=323198ab"></script>
+<script src="js/mac-compactpro.js?v=af6e2be7"></script>
+<script src="js/mac-rar.js?v=433c1646"></script>
+<script src="js/mac-ppc.js?v=88ddd27d"></script>
+<script src="js/mac-pef.js?v=1c4e2412"></script>
+<script src="js/png-stream.js?v=13fbdfcd"></script>
+<script src="js/disk-image.js?v=b06ddc4c"></script>
+<script src="js/nova-files.js?v=0c5bd9e2"></script>
+<script src="js/nova-records.js?v=2f21a743"></script>
+<script src="js/nova-ncb.js?v=98e9d7e3"></script>
+<script src="js/nova-pilot.js?v=258dd66c"></script>
+<script src="js/nova-sprites.js?v=6c456e25"></script>
+<script src="js/nova-universe.js?v=f3ca3b15"></script>
+<script src="js/nova-bits.js?v=3f88a982"></script>
+<script src="js/nova-missions.js?v=955ed6de"></script>
+<script src="js/nova-subway.js?v=9ce60805"></script>
+<script src="js/nova-labels.js?v=7d212c2c"></script>
+<script src="js/nova-ships.js?v=ff515815"></script>
+<script src="js/nova-flight.js?v=e67caf96"></script>
+<script src="js/nova-fight.js?v=84cc26fe"></script>
+<script src="js/nova-compare.js?v=4c219d4c"></script>
+<script src="js/nova-fields.js?v=5e550cde"></script>
+<script src="js/nova-deadends.js?v=8dd4859f"></script>
+<script src="js/nova-plugin.js?v=b43a2bb1"></script>
+<script src="js/nova-refs.js?v=a3fd0d83"></script>
+<script src="js/nova-rules.js?v=989c9b3e"></script>
+<script src="js/nova-routines.js?v=990acf0d"></script>
+<script src="js/nova-program.js?v=11d42da8"></script>
+<script src="js/nova-fieldsites.js?v=d6f9c71e"></script>
+<script src="js/nova-collection.js?v=c57bad58"></script>
+<script src="js/nova-sound.js?v=f16602d0"></script>
+<script src="js/page-open.js?v=5ab7bf23"></script>
+<script src="js/page-compare.js?v=ae7ac2dd"></script>
+<script src="js/page-collection.js?v=125dc39d"></script>
+<script src="js/page-plugin.js?v=b1f2cb14"></script>
+<script src="js/page-svg.js?v=df85a9af"></script>
+<script src="js/page-map.js?v=d05fccc3"></script>
+<script src="js/page-pilot.js?v=44b651d8"></script>
+<script src="js/page-ships.js?v=ad344c91"></script>
+<script src="js/page-flight.js?v=60bb109f"></script>
+<script src="js/page-battle.js?v=3b4bbaf6"></script>
+<script src="js/page-records.js?v=dc3bff85"></script>
+<script src="js/page-code.js?v=1328a3da"></script>
+<script src="js/page-library.js?v=6d782803"></script>
+</body>
+</html>

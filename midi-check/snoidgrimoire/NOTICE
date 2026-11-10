@@ -1,0 +1,29 @@
+# What the licence covers, and what it does not
+
+The work in this repository — `index.html`, `js/`, `utilities/` and the
+documentation beside them — is licensed under the GNU General Public License,
+version 3 or (at your option) any later version. `LICENSE` holds the full text.
+
+`js/mac-*.js` are copied from mac-files (`ratlizard/mac-files`), which is under
+the same licence, and are kept identical to it by `utilities/copies_check.mjs`;
+its NOTICE says what in them came from elsewhere.
+
+## Not covered
+
+**The Logical Journey of the Zoombinis itself.** The game is copyright
+Brøderbund Software and TERC, and its successors. The game, its data, its
+documentation and everything shipped with it are not in this repository and
+are not distributed with it. The page reads a copy that you supply, or one the
+Internet Archive already hosts publicly, in your browser.
+
+**QuickTime Musical Instruments.** A tune is played through QuickTime 3's
+instruments, copyright Apple Computer and Roland. They are not in this
+repository: the page fetches QuickTime 3's installer from the Internet
+Archive, or takes a copy you supply, in your browser.
+
+**`reference/`**, which is gitignored: the game, the extraction project's
+tools and output, and the programs the checks compare against, among them
+ScummVM's Zoombinis branch (`ied206/scummvm-zoombini`, GPL-3.0). None of their
+code is in this repository unless a file says it was ported, and from where. So
+far: the ferry's solver, `zbFerryMatch` in `js/zb-puzzle-ferry.js`, from
+the branch's `zoombini_pages/puzzle_ferry.cpp` (GPL-3.0).
